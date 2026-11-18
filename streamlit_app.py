@@ -62,8 +62,8 @@ def load_model():
     )
     
     for grp in ["High", "Low"]:
-    q = df[df["rating"] == grp][FEATURES].quantile([0.25, 0.75]).round().astype(int)
-    profiles[f"{grp} range"] = [f"{q.loc[0.25, f]}–{q.loc[0.75, f]}" for f in FEATURES]
+        q = df[df["rating"] == grp][FEATURES].quantile([0.25, 0.75]).round().astype(int)
+        profiles[f"{grp} range"] = [f"{q.loc[0.25, f]}–{q.loc[0.75, f]}" for f in FEATURES]
     
     return model, metrics, importances, profiles
 

@@ -124,7 +124,7 @@ with tab_single:
                 st.caption("⚠️ Low confidence. Check this student's activity and recent trend before deciding on an action.")
 
         st.markdown("**How this student compares**")
-            compare = pd.DataFrame(
+        compare = pd.DataFrame(
                 {
                     "This student": row.iloc[0].astype(int).astype(str),
                     "Typical High (middle 50%)": profiles["High range"],

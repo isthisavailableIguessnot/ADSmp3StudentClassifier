@@ -116,7 +116,7 @@ with tab_single:
                 st.success("### ✅ High engagement\nThis student looks on track.")
             st.progress(float(p_low), text=f"Chance of Low engagement: {p_low:.0%}")
             if 0.35 <= p_low <= 0.65:
-                st.caption("The model is unsure about this one. Treat it as borderline.")
+                st.caption("⚠️ Low confidence. Check this student's activity and recent trend before deciding on an action.")
 
         st.markdown("**How this student compares**")
         compare = pd.DataFrame(

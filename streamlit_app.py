@@ -5,23 +5,32 @@ from sklearn.metrics import accuracy_score, classification_report, confusion_mat
 from sklearn.model_selection import train_test_split
 
 DATA_PATH = "augmented_balanced_dataset_m.csv"
-FEATURES = [
-    "Submission.Actions",
-    "Quiz.Actions",
-    "Forum.Actions",
-    "Create.Actions",
-    "Read.Actions",
-    "Update.Actions",
-    "Delete.Actions",
-    "Days.Logged.In",
-]
 
-st.set_page_config(page_title="EduSentry", page_icon="🎓", layout="wide")
+# column name -> (friendly label, help text), grouped for the form
+GROUPS = {
+    "📅 Attendance": {
+        "Days.Logged.In": ("Days logged in", "Number of different days the student logged in."),
+    },
+    "📖 Learning activity": {
+        "Read.Actions": ("Reading actions", "Times the student viewed course materials."),
+        "Quiz.Actions": ("Quiz actions", "Quiz attempts and quiz-related clicks."),
+        "Forum.Actions": ("Forum actions", "Posts, replies and views in discussion forums."),
+    },
+    "📝 Coursework": {
+        "Submission.Actions": ("Submissions", "Assignments submitted."),
+        "Create.Actions": ("Items created", "New content the student created."),
+        "Update.Actions": ("Items edited", "Edits to existing content."),
+        "Delete.Actions": ("Items deleted", "Content the student deleted."),
+    },
+}
+FEATURES = [f for g in GROUPS.values() for f in g]
+LABEL = {f: lbl for g in GROUPS.values() for f, (lbl, _) in g.items()}
+
+st.set_page_config(page_title="High or Low?", page_icon="🎓", layout="wide")
 
 
-@st.cache_resource(show_spinner="Training model...")
+@st.cache_resource(show_spinner="Training model (first load only)...")
 def load_model():
-    """Same steps as the notebook; runs once and is cached."""
     df = pd.read_csv(DATA_PATH)
     X, y = df[FEATURES], df["rating"]
     X_train, X_test, y_train, y_test = train_test_split(
@@ -43,42 +52,91 @@ def load_model():
         ),
     }
     importances = pd.Series(model.feature_importances_, index=FEATURES).sort_values()
-    return model, metrics, importances
+    # "typical" student for each class and overall (medians), used for presets and comparison
+    profiles = pd.DataFrame(
+        {
+            "High": df[df["rating"] == "High"][FEATURES].median(),
+            "Low": df[df["rating"] == "Low"][FEATURES].median(),
+            "All": df[FEATURES].median(),
+        }
+    )
+    return model, metrics, importances, profiles
 
 
-model, metrics, importances = load_model()
-classes = list(model.classes_)  # ['High', 'Low']
+model, metrics, importances, profiles = load_model()
+classes = list(model.classes_)
 
-st.title("🎓High or Low?: Early Student Engagement Monitor")
-st.caption("Predicts whether a student's online engagement is High or Low from their LMS activity.")
+# ---------- preset buttons (callbacks run before the widgets are drawn) ----------
+for f in FEATURES:
+    st.session_state.setdefault(f, int(profiles.loc[f, "All"]))
+
+
+def apply_preset(name):
+    for f in FEATURES:
+        st.session_state[f] = int(profiles.loc[f, name])
+
+
+st.title("🎓 High or Low?: Early Student Engagement Monitor")
+st.caption(
+    "Enter a student's recent LMS activity to see whether their engagement looks High or Low. "
+    "Use it to decide who to check in with, not as a final judgment."
+)
 
 tab_single, tab_batch, tab_model = st.tabs(["Single student", "Batch (CSV)", "Model info"])
 
 # ---------- Single prediction ----------
 with tab_single:
-    st.subheader("Enter a student's activity")
-    cols = st.columns(4)
-    values = {}
-    for i, feat in enumerate(FEATURES):
-        with cols[i % 4]:
-            values[feat] = st.number_input(feat, min_value=0, value=0, step=1)
+    left, right = st.columns([3, 2], gap="large")
 
-    if st.button("Predict", type="primary"):
-        row = pd.DataFrame([values])[FEATURES]
-        pred = model.predict(row)[0]
-        proba = model.predict_proba(row)[0]
-        p = dict(zip(classes, proba))
+    with left:
+        st.subheader("Student activity")
+        b1, b2, b3, _ = st.columns([1, 1, 1, 2])
+        b1.button("Typical High", on_click=apply_preset, args=("High",), width="stretch")
+        b2.button("Typical Low", on_click=apply_preset, args=("Low",), width="stretch")
+        b3.button("Reset", on_click=apply_preset, args=("All",), width="stretch")
+        st.caption("Presets fill the form with the median student from each group in the training data.")
 
-        if pred == "Low":
-            st.error(f"⚠️ Predicted engagement: **Low** (at risk), {p['Low']:.0%} confidence")
-        else:
-            st.success(f"✅ Predicted engagement: **High**, {p['High']:.0%} confidence")
-        st.progress(float(p["Low"]), text=f"Probability of Low: {p['Low']:.1%}")
+        for group, feats in GROUPS.items():
+            with st.container(border=True):
+                st.markdown(f"**{group}**")
+                cols = st.columns(len(feats))
+                for col, (feat, (label, tip)) in zip(cols, feats.items()):
+                    col.number_input(label, min_value=0, step=1, help=tip, key=feat)
+
+    with right:
+        st.subheader("Prediction")
+        row = pd.DataFrame([{f: st.session_state[f] for f in FEATURES}])[FEATURES]
+        proba = dict(zip(classes, model.predict_proba(row)[0]))
+        p_low = proba["Low"]
+
+        with st.container(border=True):
+            if p_low >= 0.5:
+                st.error("### ⚠️ Low engagement\nThis student may need a check-in.")
+            else:
+                st.success("### ✅ High engagement\nThis student looks on track.")
+            st.progress(float(p_low), text=f"Chance of Low engagement: {p_low:.0%}")
+            if 0.35 <= p_low <= 0.65:
+                st.caption("The model is unsure about this one. Treat it as borderline.")
+
+        st.markdown("**How this student compares**")
+        compare = pd.DataFrame(
+            {
+                "This student": row.iloc[0],
+                "Typical High": profiles["High"],
+                "Typical Low": profiles["Low"],
+            }
+        ).loc[FEATURES]
+        compare.index = [LABEL[f] for f in compare.index]
+        st.dataframe(compare.astype(int), width="stretch")
 
 # ---------- Batch prediction ----------
 with tab_batch:
     st.subheader("Upload weekly activity logs")
-    st.write(f"CSV must contain these columns: `{'`, `'.join(FEATURES)}` (extra columns such as a student ID are kept).")
+    st.write(
+        "Upload a CSV with one row per student. Required columns: "
+        + ", ".join(f"`{f}`" for f in FEATURES)
+        + ". Extra columns (like a student ID) are kept."
+    )
     up = st.file_uploader("CSV file", type="csv")
     if up:
         batch = pd.read_csv(up)
@@ -89,22 +147,31 @@ with tab_batch:
             batch["Prediction"] = model.predict(batch[FEATURES])
             batch["P(Low)"] = model.predict_proba(batch[FEATURES])[:, classes.index("Low")]
             batch = batch.sort_values("P(Low)", ascending=False)
-            st.write(f"**{(batch['Prediction'] == 'Low').sum()}** of {len(batch)} students flagged as Low.")
-            st.dataframe(batch, use_container_width=True)
+            n_low = int((batch["Prediction"] == "Low").sum())
+            m1, m2 = st.columns(2)
+            m1.metric("Students", len(batch))
+            m2.metric("Flagged as Low", n_low)
+            st.dataframe(
+                batch,
+                width="stretch",
+                column_config={"P(Low)": st.column_config.ProgressColumn("P(Low)", min_value=0, max_value=1)},
+            )
             st.download_button(
                 "Download results", batch.to_csv(index=False).encode(), "predictions.csv", "text/csv"
             )
 
 # ---------- Model info ----------
 with tab_model:
-    st.subheader("Held-out test performance")
-    st.metric("Test accuracy", f"{metrics['accuracy']:.1%}")
+    st.subheader("How well does the model work?")
+    st.metric("Accuracy on held-out test data", f"{metrics['accuracy']:.1%}")
     c1, c2 = st.columns(2)
     with c1:
-        st.write("Confusion matrix")
+        st.write("**Confusion matrix** (rows are the truth, columns are the prediction)")
         st.dataframe(metrics["cm"])
-        st.write("Classification report")
+        st.write("**Classification report**")
         st.dataframe(metrics["report"].round(2))
     with c2:
-        st.write("Feature importance")
-        st.bar_chart(importances)
+        st.write("**Which activities matter most to the model**")
+        imp = importances.copy()
+        imp.index = [LABEL[f] for f in imp.index]
+        st.bar_chart(imp, horizontal=True)

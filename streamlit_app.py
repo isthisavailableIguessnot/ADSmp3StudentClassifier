@@ -1,151 +1,110 @@
-import streamlit as st
 import pandas as pd
-import math
-from pathlib import Path
+import streamlit as st
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+from sklearn.model_selection import train_test_split
 
-# Set the title and favicon that appear in the Browser's tab bar.
-st.set_page_config(
-    page_title='GDP dashboard',
-    page_icon=':earth_americas:', # This is an emoji shortcode. Could be a URL too.
-)
-
-# -----------------------------------------------------------------------------
-# Declare some useful functions.
-
-@st.cache_data
-def get_gdp_data():
-    """Grab GDP data from a CSV file.
-
-    This uses caching to avoid having to read the file every time. If we were
-    reading from an HTTP endpoint instead of a file, it's a good idea to set
-    a maximum age to the cache with the TTL argument: @st.cache_data(ttl='1d')
-    """
-
-    # Instead of a CSV on disk, you could read from an HTTP endpoint here too.
-    DATA_FILENAME = Path(__file__).parent/'data/gdp_data.csv'
-    raw_gdp_df = pd.read_csv(DATA_FILENAME)
-
-    MIN_YEAR = 1960
-    MAX_YEAR = 2022
-
-    # The data above has columns like:
-    # - Country Name
-    # - Country Code
-    # - [Stuff I don't care about]
-    # - GDP for 1960
-    # - GDP for 1961
-    # - GDP for 1962
-    # - ...
-    # - GDP for 2022
-    #
-    # ...but I want this instead:
-    # - Country Name
-    # - Country Code
-    # - Year
-    # - GDP
-    #
-    # So let's pivot all those year-columns into two: Year and GDP
-    gdp_df = raw_gdp_df.melt(
-        ['Country Code'],
-        [str(x) for x in range(MIN_YEAR, MAX_YEAR + 1)],
-        'Year',
-        'GDP',
-    )
-
-    # Convert years from string to integers
-    gdp_df['Year'] = pd.to_numeric(gdp_df['Year'])
-
-    return gdp_df
-
-gdp_df = get_gdp_data()
-
-# -----------------------------------------------------------------------------
-# Draw the actual page
-
-# Set the title that appears at the top of the page.
-'''
-# :earth_americas: GDP dashboard
-
-Browse GDP data from the [World Bank Open Data](https://data.worldbank.org/) website. As you'll
-notice, the data only goes to 2022 right now, and datapoints for certain years are often missing.
-But it's otherwise a great (and did I mention _free_?) source of data.
-'''
-
-# Add some spacing
-''
-''
-
-min_value = gdp_df['Year'].min()
-max_value = gdp_df['Year'].max()
-
-from_year, to_year = st.slider(
-    'Which years are you interested in?',
-    min_value=min_value,
-    max_value=max_value,
-    value=[min_value, max_value])
-
-countries = gdp_df['Country Code'].unique()
-
-if not len(countries):
-    st.warning("Select at least one country")
-
-selected_countries = st.multiselect(
-    'Which countries would you like to view?',
-    countries,
-    ['DEU', 'FRA', 'GBR', 'BRA', 'MEX', 'JPN'])
-
-''
-''
-''
-
-# Filter the data
-filtered_gdp_df = gdp_df[
-    (gdp_df['Country Code'].isin(selected_countries))
-    & (gdp_df['Year'] <= to_year)
-    & (from_year <= gdp_df['Year'])
+DATA_PATH = "augmented_balanced_dataset_m.csv"
+FEATURES = [
+    "Submission.Actions",
+    "Quiz.Actions",
+    "Forum.Actions",
+    "Create.Actions",
+    "Read.Actions",
+    "Update.Actions",
+    "Delete.Actions",
+    "Days.Logged.In",
 ]
 
-st.header('GDP over time', divider='gray')
-
-''
-
-st.line_chart(
-    filtered_gdp_df,
-    x='Year',
-    y='GDP',
-    color='Country Code',
-)
-
-''
-''
+st.set_page_config(page_title="EduSentry", page_icon="🎓", layout="wide")
 
 
-first_year = gdp_df[gdp_df['Year'] == from_year]
-last_year = gdp_df[gdp_df['Year'] == to_year]
+@st.cache_resource(show_spinner="Training model...")
+def load_model():
+    """Same steps as the notebook; runs once and is cached."""
+    df = pd.read_csv(DATA_PATH)
+    X, y = df[FEATURES], df["rating"]
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.20, random_state=42, stratify=y
+    )
+    model = RandomForestClassifier(n_estimators=1000, random_state=44, n_jobs=-1)
+    model.fit(X_train, y_train)
 
-st.header(f'GDP in {to_year}', divider='gray')
+    y_pred = model.predict(X_test)
+    metrics = {
+        "accuracy": accuracy_score(y_test, y_pred),
+        "report": pd.DataFrame(
+            classification_report(y_test, y_pred, labels=["High", "Low"], output_dict=True)
+        ).T,
+        "cm": pd.DataFrame(
+            confusion_matrix(y_test, y_pred, labels=["High", "Low"]),
+            index=["Actual High", "Actual Low"],
+            columns=["Predicted High", "Predicted Low"],
+        ),
+    }
+    importances = pd.Series(model.feature_importances_, index=FEATURES).sort_values()
+    return model, metrics, importances
 
-''
 
-cols = st.columns(4)
+model, metrics, importances = load_model()
+classes = list(model.classes_)  # ['High', 'Low']
 
-for i, country in enumerate(selected_countries):
-    col = cols[i % len(cols)]
+st.title("🎓 EduSentry: Early Student Engagement Monitor")
+st.caption("Predicts whether a student's online engagement is High or Low from their LMS activity.")
 
-    with col:
-        first_gdp = first_year[first_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-        last_gdp = last_year[last_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
+tab_single, tab_batch, tab_model = st.tabs(["Single student", "Batch (CSV)", "Model info"])
 
-        if math.isnan(first_gdp):
-            growth = 'n/a'
-            delta_color = 'off'
+# ---------- Single prediction ----------
+with tab_single:
+    st.subheader("Enter a student's activity")
+    cols = st.columns(4)
+    values = {}
+    for i, feat in enumerate(FEATURES):
+        with cols[i % 4]:
+            values[feat] = st.number_input(feat, min_value=0, value=0, step=1)
+
+    if st.button("Predict", type="primary"):
+        row = pd.DataFrame([values])[FEATURES]
+        pred = model.predict(row)[0]
+        proba = model.predict_proba(row)[0]
+        p = dict(zip(classes, proba))
+
+        if pred == "Low":
+            st.error(f"⚠️ Predicted engagement: **Low** (at risk), {p['Low']:.0%} confidence")
         else:
-            growth = f'{last_gdp / first_gdp:,.2f}x'
-            delta_color = 'normal'
+            st.success(f"✅ Predicted engagement: **High**, {p['High']:.0%} confidence")
+        st.progress(float(p["Low"]), text=f"Probability of Low: {p['Low']:.1%}")
 
-        st.metric(
-            label=f'{country} GDP',
-            value=f'{last_gdp:,.0f}B',
-            delta=growth,
-            delta_color=delta_color
-        )
+# ---------- Batch prediction ----------
+with tab_batch:
+    st.subheader("Upload weekly activity logs")
+    st.write(f"CSV must contain these columns: `{'`, `'.join(FEATURES)}` (extra columns such as a student ID are kept).")
+    up = st.file_uploader("CSV file", type="csv")
+    if up:
+        batch = pd.read_csv(up)
+        missing = [c for c in FEATURES if c not in batch.columns]
+        if missing:
+            st.error(f"Missing columns: {missing}")
+        else:
+            batch["Prediction"] = model.predict(batch[FEATURES])
+            batch["P(Low)"] = model.predict_proba(batch[FEATURES])[:, classes.index("Low")]
+            batch = batch.sort_values("P(Low)", ascending=False)
+            st.write(f"**{(batch['Prediction'] == 'Low').sum()}** of {len(batch)} students flagged as Low.")
+            st.dataframe(batch, use_container_width=True)
+            st.download_button(
+                "Download results", batch.to_csv(index=False).encode(), "predictions.csv", "text/csv"
+            )
+
+# ---------- Model info ----------
+with tab_model:
+    st.subheader("Held-out test performance")
+    st.metric("Test accuracy", f"{metrics['accuracy']:.1%}")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.write("Confusion matrix")
+        st.dataframe(metrics["cm"])
+        st.write("Classification report")
+        st.dataframe(metrics["report"].round(2))
+    with c2:
+        st.write("Feature importance")
+        st.bar_chart(importances)

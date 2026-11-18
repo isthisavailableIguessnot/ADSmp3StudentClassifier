@@ -60,6 +60,11 @@ def load_model():
             "All": df[FEATURES].median(),
         }
     )
+    
+    for grp in ["High", "Low"]:
+    q = df[df["rating"] == grp][FEATURES].quantile([0.25, 0.75]).round().astype(int)
+    profiles[f"{grp} range"] = [f"{q.loc[0.25, f]}–{q.loc[0.75, f]}" for f in FEATURES]
+    
     return model, metrics, importances, profiles
 
 
@@ -119,15 +124,15 @@ with tab_single:
                 st.caption("⚠️ Low confidence. Check this student's activity and recent trend before deciding on an action.")
 
         st.markdown("**How this student compares**")
-        compare = pd.DataFrame(
-            {
-                "This student": row.iloc[0],
-                "Typical High": profiles["High"],
-                "Typical Low": profiles["Low"],
-            }
+            compare = pd.DataFrame(
+                {
+                    "This student": row.iloc[0].astype(int).astype(str),
+                    "Typical High (middle 50%)": profiles["High range"],
+                    "Typical Low (middle 50%)": profiles["Low range"],
+                }
         ).loc[FEATURES]
         compare.index = [LABEL[f] for f in compare.index]
-        st.dataframe(compare.astype(int), width="stretch")
+        st.dataframe(compare, width="stretch")
 
 # ---------- Batch prediction ----------
 with tab_batch:

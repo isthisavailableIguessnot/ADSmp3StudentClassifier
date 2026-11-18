@@ -49,7 +49,7 @@ def load_model():
 model, metrics, importances = load_model()
 classes = list(model.classes_)  # ['High', 'Low']
 
-st.title("🎓 EduSentry: Early Student Engagement Monitor")
+st.title("🎓High or Low?: Early Student Engagement Monitor")
 st.caption("Predicts whether a student's online engagement is High or Low from their LMS activity.")
 
 tab_single, tab_batch, tab_model = st.tabs(["Single student", "Batch (CSV)", "Model info"])
